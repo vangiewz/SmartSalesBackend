@@ -2,9 +2,13 @@
 Utilidades para manejar conexiones de BD con retry logic.
 Útil para Supabase Transaction Pooler en free tier.
 """
-from django.db import connection, OperationalError
+from django.db import connection
+from django.db.utils import OperationalError, InterfaceError, DatabaseError
 from functools import wraps
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def db_retry(max_attempts=3, delay=0.5):
@@ -22,33 +26,41 @@ def db_retry(max_attempts=3, delay=0.5):
             
             for attempt in range(max_attempts):
                 try:
-                    # Cerrar conexión inactiva antes de intentar
-                    if connection.connection and connection.is_usable():
-                        pass  # conexión OK
-                    else:
-                        connection.close()  # forzar reconexión
+                    # Forzar cierre de conexión antes de cada intento
+                    connection.close()
                     
                     return func(*args, **kwargs)
                     
-                except OperationalError as e:
+                except (OperationalError, InterfaceError, DatabaseError) as e:
                     last_exception = e
                     error_msg = str(e).lower()
                     
-                    # Solo reintentar si es problema de conexión
-                    if any(keyword in error_msg for keyword in [
-                        'connection', 'timeout', 'closed', 'terminating',
-                        'pool', 'server closed', 'broken pipe'
-                    ]):
-                        if attempt < max_attempts - 1:
-                            time.sleep(delay * (attempt + 1))  # backoff exponencial
-                            connection.close()  # forzar nueva conexión
-                            continue
+                    logger.warning(f"DB error on attempt {attempt + 1}/{max_attempts}: {error_msg}")
                     
-                    # Si no es error de conexión, propagar inmediatamente
+                    # Verificar si es un error de conexión que debemos reintentar
+                    is_connection_error = any(keyword in error_msg for keyword in [
+                        'connection', 'timeout', 'closed', 'terminating',
+                        'pool', 'server closed', 'broken pipe', 'unexpectedly',
+                        'could not connect', 'no connection', 'lost connection'
+                    ])
+                    
+                    if is_connection_error and attempt < max_attempts - 1:
+                        # Espera con backoff exponencial
+                        sleep_time = delay * (2 ** attempt)  # 0.5, 1, 2 segundos
+                        logger.info(f"Retrying in {sleep_time}s...")
+                        time.sleep(sleep_time)
+                        
+                        # Forzar cierre de conexión para reconectar
+                        connection.close()
+                        continue
+                    
+                    # Si no es error de conexión o ya agotamos intentos, propagar
+                    logger.error(f"DB error after {attempt + 1} attempts: {error_msg}")
                     raise
                     
             # Si agotamos intentos, lanzar última excepción
-            raise last_exception
+            if last_exception:
+                raise last_exception
             
         return wrapper
     return decorator

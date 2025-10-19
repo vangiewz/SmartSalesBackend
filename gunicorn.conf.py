@@ -14,13 +14,13 @@ workers = int(os.getenv('WEB_CONCURRENCY', 2))
 worker_class = 'sync'
 threads = 4  # threads por worker
 worker_connections = 1000
-max_requests = 1000  # reciclar workers cada 1000 requests
-max_requests_jitter = 50
+max_requests = 500  # reciclar workers más frecuentemente
+max_requests_jitter = 100
 
 # Timeouts
-timeout = 120  # 2 minutos para requests lentos
-keepalive = 5  # mantener conexiones HTTP activas
-graceful_timeout = 30
+timeout = 180  # 3 minutos para requests lentos (aumentado)
+keepalive = 2  # mantener conexiones HTTP activas (reducido para liberar más rápido)
+graceful_timeout = 60
 
 # Logging
 accesslog = '-'  # stdout
@@ -39,10 +39,25 @@ user = None
 group = None
 tmp_upload_dir = None
 
-# Preload app para ahorrar memoria
-preload_app = True
+# NO preload app - permite que cada worker maneje su propia conexión DB
+preload_app = False
 
-# Hooks para cerrar conexiones DB antes de reciclar workers
+# Hooks para manejar workers y conexiones DB
+def pre_fork(server, worker):
+    """Antes de hacer fork de un nuevo worker"""
+    pass
+
+def post_fork(server, worker):
+    """Después de hacer fork de un nuevo worker"""
+    # Cerrar todas las conexiones DB heredadas del proceso padre
+    from django.db import connections
+    connections.close_all()
+
+def worker_int(worker):
+    """Cuando un worker recibe SIGINT"""
+    from django.db import connections
+    connections.close_all()
+
 def worker_exit(server, worker):
     """Cerrar conexiones DB cuando un worker termina"""
     from django.db import connections
@@ -52,3 +67,7 @@ def on_exit(server):
     """Cerrar conexiones DB cuando el servidor termina"""
     from django.db import connections
     connections.close_all()
+
+def when_ready(server):
+    """Cuando el servidor está listo"""
+    print("🚀 Gunicorn is ready. Listening on: " + bind)

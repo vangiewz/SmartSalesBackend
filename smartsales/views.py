@@ -1,12 +1,16 @@
-from django.db import connection, transaction, OperationalError
+from django.db import connection, transaction
+from django.db.utils import OperationalError, InterfaceError, DatabaseError
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+import logging
 
 from .serializers import RegisterSerializer, LoginSerializer, UsuarioMeSerializer
 from .authsupabase.api import create_user_admin, sign_in_password, SupabaseError
 from .db_utils import db_retry, execute_query_with_retry
+
+logger = logging.getLogger(__name__)
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
@@ -80,7 +84,6 @@ class RegisterView(APIView):
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
-    @db_retry(max_attempts=3, delay=0.5)
     def post(self, request):
         s = LoginSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -93,50 +96,92 @@ class LoginView(APIView):
         except SupabaseError:
             return Response({"detail": "Credenciales inválidas."}, status=401)
 
-        # 2) Perfil + roles
-        row = execute_query_with_retry(
-            """
-            SELECT u.id, u.nombre, u.telefono, u.correo
-            FROM usuario u
-            WHERE lower(u.correo) = lower(%s)
-            """,
-            [email],
-            fetch_one=True
-        )
+        # 2) Perfil + roles con retry manual más robusto
+        max_retries = 3
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Forzar cierre de conexión antes de cada intento
+                connection.close()
+                
+                # Obtener perfil
+                with connection.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT u.id, u.nombre, u.telefono, u.correo
+                        FROM usuario u
+                        WHERE lower(u.correo) = lower(%s)
+                        """,
+                        [email],
+                    )
+                    row = cur.fetchone()
 
-        if row:
-            user_id, nombre, telefono, correo = row
-            roles_rows = execute_query_with_retry(
-                """
-                SELECT r.nombre
-                FROM roles r
-                JOIN rolesusuario ru ON ru.rol_id = r.id
-                WHERE ru.usuario_id = %s
-                """,
-                [user_id],
-                fetch_all=True
-            )
-            roles = [r[0] for r in roles_rows]
-        else:
-            user_id, nombre, telefono, correo, roles = None, None, None, email, []
+                if row:
+                    user_id, nombre, telefono, correo = row
+                    
+                    # Obtener roles
+                    with connection.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT r.nombre
+                            FROM roles r
+                            JOIN rolesusuario ru ON ru.rol_id = r.id
+                            WHERE ru.usuario_id = %s
+                            """,
+                            [user_id],
+                        )
+                        roles = [r[0] for r in cur.fetchall()]
+                else:
+                    user_id, nombre, telefono, correo, roles = None, None, None, email, []
 
-        perfil = {
-            "id": user_id,
-            "correo": correo,
-            "nombre": nombre,
-            "telefono": telefono,
-            "roles": roles,
-        }
+                # Si llegamos aquí, la operación fue exitosa
+                perfil = {
+                    "id": user_id,
+                    "correo": correo,
+                    "nombre": nombre,
+                    "telefono": telefono,
+                    "roles": roles,
+                }
 
-        return Response({
-            "user": perfil,
-            "tokens": {
-                "access": token_data.get("access_token"),
-                "refresh": token_data.get("refresh_token"),
-                "token_type": token_data.get("token_type", "bearer"),
-                "expires_in": token_data.get("expires_in"),
-            },
-        })
+                return Response({
+                    "user": perfil,
+                    "tokens": {
+                        "access": token_data.get("access_token"),
+                        "refresh": token_data.get("refresh_token"),
+                        "token_type": token_data.get("token_type", "bearer"),
+                        "expires_in": token_data.get("expires_in"),
+                    },
+                })
+                
+            except (OperationalError, InterfaceError, DatabaseError) as e:
+                last_error = e
+                error_msg = str(e).lower()
+                
+                logger.warning(f"Login DB error on attempt {attempt + 1}/{max_retries}: {error_msg}")
+                
+                # Verificar si es un error de conexión
+                is_connection_error = any(keyword in error_msg for keyword in [
+                    'connection', 'timeout', 'closed', 'terminating',
+                    'pool', 'server closed', 'broken pipe', 'unexpectedly'
+                ])
+                
+                if is_connection_error and attempt < max_retries - 1:
+                    # Esperar antes de reintentar (backoff exponencial)
+                    import time
+                    sleep_time = 0.5 * (2 ** attempt)
+                    logger.info(f"Retrying login query in {sleep_time}s...")
+                    time.sleep(sleep_time)
+                    connection.close()
+                    continue
+                else:
+                    # Si no es error de conexión o agotamos intentos
+                    logger.error(f"Login failed after {attempt + 1} attempts: {error_msg}")
+                    raise
+        
+        # Si salimos del loop sin éxito
+        if last_error:
+            raise last_error
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
