@@ -97,13 +97,20 @@ class LoginView(APIView):
             return Response({"detail": "Credenciales inválidas."}, status=401)
 
         # 2) Perfil + roles con retry manual más robusto
-        max_retries = 3
+        max_retries = 5  # Aumentado a 5 intentos
         last_error = None
         
         for attempt in range(max_retries):
             try:
                 # Forzar cierre de conexión antes de cada intento
                 connection.close()
+                
+                # Esperar un poco más si no es el primer intento
+                if attempt > 0:
+                    import time
+                    wait_time = min(2 ** attempt, 5)  # Max 5 segundos
+                    logger.info(f"Waiting {wait_time}s before attempt {attempt + 1}/{max_retries}...")
+                    time.sleep(wait_time)
                 
                 # Obtener perfil
                 with connection.cursor() as cur:
@@ -167,11 +174,7 @@ class LoginView(APIView):
                 ])
                 
                 if is_connection_error and attempt < max_retries - 1:
-                    # Esperar antes de reintentar (backoff exponencial)
-                    import time
-                    sleep_time = 0.5 * (2 ** attempt)
-                    logger.info(f"Retrying login query in {sleep_time}s...")
-                    time.sleep(sleep_time)
+                    # Continuar al siguiente intento (ya esperamos arriba)
                     connection.close()
                     continue
                 else:
