@@ -83,12 +83,15 @@ DATABASES = {
 
 # 🔧 Configuraciones adicionales para el pooler de Supabase
 DATABASES["default"]["OPTIONS"] = {
-    "connect_timeout": 5,  # timeout de conexión más corto (5 segundos)
-    "options": "-c statement_timeout=25000 -c idle_in_transaction_session_timeout=30000",  # timeouts de queries
+    "connect_timeout": 10,
+    "options": "-c statement_timeout=30000",
     "keepalives": 1,
-    "keepalives_idle": 5,  # más agresivo
-    "keepalives_interval": 2,  # más agresivo
-    "keepalives_count": 3,  # menos intentos
+    "keepalives_idle": 10,
+    "keepalives_interval": 5,
+    "keepalives_count": 3,
+    "sslmode": "require",
+    # Forzar uso de IPv4 únicamente
+    "hostaddr": None,  # dejar que resuelva el DNS
 }
 
 # Configuración adicional para evitar problemas de pool
