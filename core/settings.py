@@ -62,7 +62,7 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 
 # =========================
-# Database (Session Pooler 5432)
+# Database -> Transaction Pooler (6543)
 # =========================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -70,24 +70,27 @@ if not DATABASE_URL:
 
 DB_SSL_REQUIRE = os.getenv("DB_SSL_REQUIRE", "True").lower() == "true"
 
+# Con transaction pooler: conexiones cortas (por request)
 DATABASES = {
     "default": dj_database_url.parse(
         DATABASE_URL,
-        conn_max_age=600,          # conexiones persistentes (como el otro proyecto)
+        conn_max_age=0,           # <- NO mantener conexión viva entre requests
         ssl_require=DB_SSL_REQUIRE,
     )
 }
-# Reusa y reabre limpio al “despertar”
+
+# Health checks para cerrar conexiones muertas si Django intenta reusar (defensa extra)
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
-# Puedes dejarlo; con Session no hace falta, pero no molesta
+# Recomendado con poolers: deshabilitar cursores server-side
 DISABLE_SERVER_SIDE_CURSORS = True
 
-# (Opcional) corta consultas colgadas
+# Opciones PG: SSL y timeouts
 DATABASES["default"].setdefault("OPTIONS", {})
 DATABASES["default"]["OPTIONS"].update({
     "sslmode": "require",
-    "options": "-c statement_timeout=30000",
+    "connect_timeout": 10,            # evita colgadas al abrir conexión
+    "options": "-c statement_timeout=30000",  # 30s por query
 })
 
 # =========================
@@ -143,7 +146,7 @@ CSRF_TRUSTED = [o.strip() for o in os.getenv("CSRF_TRUSTED", "").split(",") if o
 if CSRF_TRUSTED:
     CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED
 
-# (opcional) logging para ver trazas si algo falla
+# (opcional) logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOGGING = {
     "version": 1,
