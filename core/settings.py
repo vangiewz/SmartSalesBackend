@@ -72,11 +72,23 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 
 # ====== Base de Datos ======
+# 🔧 Optimizado para Supabase Transaction Pooler (free tier)
 DATABASES = {
     "default": dj_database_url.config(
         default=os.environ.get("DATABASE_URL"),
-        conn_max_age=600,
+        conn_max_age=0,  # 👈 NO reusar conexiones (pooler ya lo maneja)
+        conn_health_checks=True,  # 👈 validar conexión antes de usar
     )
+}
+
+# 🔧 Configuraciones adicionales para el pooler de Supabase
+DATABASES["default"]["OPTIONS"] = {
+    "connect_timeout": 10,  # timeout de conexión (segundos)
+    "options": "-c statement_timeout=30000",  # timeout de queries (30s)
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 5,
 }
 
 # ====== Validaciones de Password ======

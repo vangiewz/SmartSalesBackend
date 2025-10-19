@@ -1,4 +1,4 @@
-from django.db import connection, transaction
+from django.db import connection, transaction, OperationalError
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -6,10 +6,12 @@ from rest_framework.response import Response
 
 from .serializers import RegisterSerializer, LoginSerializer, UsuarioMeSerializer
 from .authsupabase.api import create_user_admin, sign_in_password, SupabaseError
+from .db_utils import db_retry, execute_query_with_retry
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
 
+    @db_retry(max_attempts=3, delay=0.5)
     @transaction.atomic
     def post(self, request):
         s = RegisterSerializer(data=request.data)
@@ -78,6 +80,7 @@ class RegisterView(APIView):
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
+    @db_retry(max_attempts=3, delay=0.5)
     def post(self, request):
         s = LoginSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -91,30 +94,29 @@ class LoginView(APIView):
             return Response({"detail": "Credenciales inválidas."}, status=401)
 
         # 2) Perfil + roles
-        with connection.cursor() as cur:
-            cur.execute(
-                """
-                SELECT u.id, u.nombre, u.telefono, u.correo
-                FROM usuario u
-                WHERE lower(u.correo) = lower(%s)
-                """,
-                [email],
-            )
-            row = cur.fetchone()
+        row = execute_query_with_retry(
+            """
+            SELECT u.id, u.nombre, u.telefono, u.correo
+            FROM usuario u
+            WHERE lower(u.correo) = lower(%s)
+            """,
+            [email],
+            fetch_one=True
+        )
 
         if row:
             user_id, nombre, telefono, correo = row
-            with connection.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT r.nombre
-                    FROM roles r
-                    JOIN rolesusuario ru ON ru.rol_id = r.id
-                    WHERE ru.usuario_id = %s
-                    """,
-                    [user_id],
-                )
-                roles = [r[0] for r in cur.fetchall()]
+            roles_rows = execute_query_with_retry(
+                """
+                SELECT r.nombre
+                FROM roles r
+                JOIN rolesusuario ru ON ru.rol_id = r.id
+                WHERE ru.usuario_id = %s
+                """,
+                [user_id],
+                fetch_all=True
+            )
+            roles = [r[0] for r in roles_rows]
         else:
             user_id, nombre, telefono, correo, roles = None, None, None, email, []
 
@@ -139,38 +141,38 @@ class LoginView(APIView):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @db_retry(max_attempts=3, delay=0.5)
     def get(self, request):
         uid = request.user.id  # viene del JWT de Supabase
         if not uid:
             return Response({"detail": "Token sin 'sub'."}, status=400)
 
-        with connection.cursor() as cur:
-            cur.execute(
-                """
-                SELECT u.id, u.nombre, u.telefono, u.correo
-                FROM usuario u
-                WHERE u.id = %s
-                """,
-                [uid],
-            )
-            row = cur.fetchone()
+        row = execute_query_with_retry(
+            """
+            SELECT u.id, u.nombre, u.telefono, u.correo
+            FROM usuario u
+            WHERE u.id = %s
+            """,
+            [uid],
+            fetch_one=True
+        )
 
         if not row:
             return Response({"detail": "No existe perfil en 'usuario'."}, status=404)
 
         user_id, nombre, telefono, correo = row
 
-        with connection.cursor() as cur:
-            cur.execute(
-                """
-                SELECT r.nombre
-                FROM roles r
-                JOIN rolesusuario ru ON ru.rol_id = r.id
-                WHERE ru.usuario_id = %s
-                """,
-                [user_id],
-            )
-            roles = [r[0] for r in cur.fetchall()]
+        roles_rows = execute_query_with_retry(
+            """
+            SELECT r.nombre
+            FROM roles r
+            JOIN rolesusuario ru ON ru.rol_id = r.id
+            WHERE ru.usuario_id = %s
+            """,
+            [user_id],
+            fetch_all=True
+        )
+        roles = [r[0] for r in roles_rows]
 
         data = {
             "id": user_id,
@@ -180,3 +182,34 @@ class MeView(APIView):
             "roles": roles,
         }
         return Response(UsuarioMeSerializer(data).data)
+
+
+class HealthCheckView(APIView):
+    """
+    Health check para mantener el servicio activo en Render free tier.
+    También verifica que la conexión a la BD funcione correctamente.
+    """
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        try:
+            # Verificar conexión a BD
+            row = execute_query_with_retry(
+                "SELECT 1 as alive",
+                fetch_one=True
+            )
+            
+            db_status = "ok" if row and row[0] == 1 else "error"
+            
+            return Response({
+                "status": "healthy",
+                "database": db_status,
+                "service": "SmartSales Backend"
+            })
+        except Exception as e:
+            return Response({
+                "status": "unhealthy",
+                "database": "error",
+                "error": str(e),
+                "service": "SmartSales Backend"
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)

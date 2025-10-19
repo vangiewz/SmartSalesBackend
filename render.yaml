@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: smartsales-backend
+    runtime: python
+    plan: free
+    # Region Oregon (US West)
+    region: oregon
+    
+    # Build command
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt && python manage.py migrate --noinput && python manage.py collectstatic --noinput
+    
+    # Start command
+    startCommand: gunicorn core.wsgi --workers 2 --threads 4 --timeout 120 --keep-alive 5 --log-level info
+    
+    # Environment variables (las sensibles desde el dashboard)
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: WEB_CONCURRENCY
+        value: 2
+    
+    # Health check para mantener el servicio activo
+    healthCheckPath: /auth/health/
+    
+    # Auto deploy
+    autoDeploy: true
