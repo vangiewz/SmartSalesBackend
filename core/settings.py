@@ -83,13 +83,16 @@ DATABASES = {
 
 # 🔧 Configuraciones adicionales para el pooler de Supabase
 DATABASES["default"]["OPTIONS"] = {
-    "connect_timeout": 10,  # timeout de conexión (segundos)
-    "options": "-c statement_timeout=30000",  # timeout de queries (30s)
+    "connect_timeout": 5,  # timeout de conexión más corto (5 segundos)
+    "options": "-c statement_timeout=25000 -c idle_in_transaction_session_timeout=30000",  # timeouts de queries
     "keepalives": 1,
-    "keepalives_idle": 30,
-    "keepalives_interval": 10,
-    "keepalives_count": 5,
+    "keepalives_idle": 5,  # más agresivo
+    "keepalives_interval": 2,  # más agresivo
+    "keepalives_count": 3,  # menos intentos
 }
+
+# Configuración adicional para evitar problemas de pool
+DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = True  # importante para pgBouncer/Pooler
 
 # ====== Validaciones de Password ======
 AUTH_PASSWORD_VALIDATORS = [
@@ -112,6 +115,40 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # ====== Primary Key por defecto ======
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ====== Logging ======
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{levelname}] {asctime} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django.db.backends': {
+            'handlers': ['console'],
+            'level': 'WARNING',  # Solo errores de DB
+            'propagate': False,
+        },
+        'smartsales': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
 
 # ====== CORS ======
 CORS_ALLOWED_ORIGINS = [
