@@ -70,27 +70,31 @@ if not DATABASE_URL:
 
 DB_SSL_REQUIRE = os.getenv("DB_SSL_REQUIRE", "True").lower() == "true"
 
-# Con transaction pooler: conexiones cortas (por request)
 DATABASES = {
     "default": dj_database_url.parse(
         DATABASE_URL,
-        conn_max_age=0,           # <- NO mantener conexión viva entre requests
+        conn_max_age=0,           # conexiones cortas por request (recomendado con TX pooler)
         ssl_require=DB_SSL_REQUIRE,
     )
 }
-
-# Health checks para cerrar conexiones muertas si Django intenta reusar (defensa extra)
+# Cierra/reabre limpio si Django intenta reutilizar conexión
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
-# Recomendado con poolers: deshabilitar cursores server-side
+# Con pooler: deshabilitar cursores server-side
 DISABLE_SERVER_SIDE_CURSORS = True
 
-# Opciones PG: SSL y timeouts
+# SSL, timeouts y TCP keepalive (evitan sockets colgados)
 DATABASES["default"].setdefault("OPTIONS", {})
 DATABASES["default"]["OPTIONS"].update({
-    "sslmode": "require",
-    "connect_timeout": 10,            # evita colgadas al abrir conexión
-    "options": "-c statement_timeout=30000",  # 30s por query
+    "sslmode": "require",                     # ya sea en URL o aquí
+    "connect_timeout": 5,                     # fallo rápido si el pooler está saturado
+    "options": "-c statement_timeout=15000",  # 15s por consulta
+
+    # Keepalives
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 3,
 })
 
 # =========================
