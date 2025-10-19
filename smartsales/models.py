@@ -1,8 +1,7 @@
 from django.db import models
 
-# Tablas mapeadas (unmanaged) en Supabase
 class Usuario(models.Model):
-    id = models.AutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True)  # UUID de Supabase Auth
     nombre = models.CharField(max_length=120)
     telefono = models.CharField(max_length=40, null=True, blank=True)
     correo = models.CharField(max_length=180)
@@ -20,10 +19,10 @@ class Rol(models.Model):
         db_table = "roles"
 
 class RolesUsuario(models.Model):
-    usuario = models.ForeignKey(Usuario, on_delete=models.DO_NOTHING, db_column="usuario_id")
-    rol = models.ForeignKey(Rol, on_delete=models.DO_NOTHING, db_column="rol_id")
+    usuario_id = models.UUIDField()
+    rol_id = models.IntegerField()
 
     class Meta:
         managed = False
         db_table = "rolesusuario"
-        unique_together = (("usuario", "rol"),)
+        unique_together = (("usuario_id", "rol_id"),)
