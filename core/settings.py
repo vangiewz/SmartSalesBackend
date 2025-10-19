@@ -77,6 +77,9 @@ DATABASES = {
     )
 }
 
+# ✅ único cambio para Transaction Pooler (6543)
+DISABLE_SERVER_SIDE_CURSORS = True
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
