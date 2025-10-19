@@ -13,10 +13,7 @@ DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 ALLOWED_HOSTS_ENV = os.getenv("ALLOWED_HOSTS", "")
 ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "0.0.0.0",
-    "[::1]",
+    "localhost", "127.0.0.1", "0.0.0.0", "[::1]",
 ] + ([h.strip() for h in ALLOWED_HOSTS_ENV.split(",") if h.strip()] if ALLOWED_HOSTS_ENV else [])
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -65,7 +62,7 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 
 # =========================
-# Database (Transaction Pooler 6543)
+# Database (Session Pooler 5432)
 # =========================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -76,22 +73,20 @@ DB_SSL_REQUIRE = os.getenv("DB_SSL_REQUIRE", "True").lower() == "true"
 DATABASES = {
     "default": dj_database_url.parse(
         DATABASE_URL,
-        conn_max_age=0,              # TX pooler: conexiones cortas por request
+        conn_max_age=600,          # conexiones persistentes (como el otro proyecto)
         ssl_require=DB_SSL_REQUIRE,
     )
 }
+# Reusa y reabre limpio al “despertar”
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
-# Recomendado con TX pooler
+# Puedes dejarlo; con Session no hace falta, pero no molesta
 DISABLE_SERVER_SIDE_CURSORS = True
 
-# Opciones de conexión (TLS + timeouts + keepalives)
+# (Opcional) corta consultas colgadas
 DATABASES["default"].setdefault("OPTIONS", {})
 DATABASES["default"]["OPTIONS"].update({
     "sslmode": "require",
-    "keepalives": 1,
-    "keepalives_idle": 30,
-    "keepalives_interval": 10,
-    "keepalives_count": 5,
     "options": "-c statement_timeout=30000",
 })
 
@@ -148,25 +143,15 @@ CSRF_TRUSTED = [o.strip() for o in os.getenv("CSRF_TRUSTED", "").split(",") if o
 if CSRF_TRUSTED:
     CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED
 
-# =========================
-# Logging (para ver el traceback del 500)
-# =========================
+# (opcional) logging para ver trazas si algo falla
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "handlers": {"console": {"class": "logging.StreamHandler"}},
     "loggers": {
-        "django.request": {      # errores de vistas (500)
-            "handlers": ["console"],
-            "level": "ERROR",
-            "propagate": False,
-        },
-        "django.db.backends": {  # warnings/errores de DB (útil para pooler)
-            "handlers": ["console"],
-            "level": "WARNING",
-            "propagate": False,
-        },
+        "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+        "django.db.backends": {"handlers": ["console"], "level": "WARNING", "propagate": False},
     },
     "root": {"handlers": ["console"], "level": LOG_LEVEL},
 }
