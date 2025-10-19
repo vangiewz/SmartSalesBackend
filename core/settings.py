@@ -1,39 +1,48 @@
+"""
+Django settings for core project.
+
+Optimizado para despliegue en Render.
+"""
+
 from pathlib import Path
 import os
-from datetime import timedelta
-from dotenv import load_dotenv
-import dj_database_url
+import environ
+import dj_database_url  # 👈 para conectar DB con DATABASE_URL
 
-load_dotenv()
-
+# ====== Paths ======
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-NO-USAR-EN-PROD")
-DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+# ====== Environment ======
+env = environ.Env(
+    DEBUG=(bool, False)
+)
+# Leer variables desde archivo .env en local
+environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
-ALLOWED_HOSTS_ENV = os.getenv("ALLOWED_HOSTS", "")
-ALLOWED_HOSTS = [
-    "localhost", "127.0.0.1", "0.0.0.0", "[::1]",
-] + ([h.strip() for h in ALLOWED_HOSTS_ENV.split(",") if h.strip()] if ALLOWED_HOSTS_ENV else [])
+# ====== Seguridad ======
+SECRET_KEY = env("SECRET_KEY")  # ⚠️ definido en .env o en Render
+DEBUG = env.bool("DEBUG", default=False)
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1", ".onrender.com"])
 
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-
+# ====== Aplicaciones ======
 INSTALLED_APPS = [
-    # sin admin
+    "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-
-    "corsheaders",
     "rest_framework",
-    "smartsales",
+    "corsheaders",
+    # ====== tu app ======
+    "smartsales",  # 👈 /auth/register, /auth/login, /auth/me
 ]
 
+# ====== Middleware ======
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",
+    "corsheaders.middleware.CorsMiddleware",  # 👈 CORS primero
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",  # 👈 servir archivos estáticos
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -44,6 +53,7 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "core.urls"
 
+# ====== Templates ======
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
@@ -61,45 +71,15 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "core.wsgi.application"
 
-# =========================
-# Database -> Transaction Pooler (6543)
-# =========================
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("Falta DATABASE_URL en .env")
-
-DB_SSL_REQUIRE = os.getenv("DB_SSL_REQUIRE", "True").lower() == "true"
-
+# ====== Base de Datos ======
 DATABASES = {
-    "default": dj_database_url.parse(
-        DATABASE_URL,
-        conn_max_age=0,           # conexiones cortas por request (recomendado con TX pooler)
-        ssl_require=DB_SSL_REQUIRE,
+    "default": dj_database_url.config(
+        default=os.environ.get("DATABASE_URL"),
+        conn_max_age=600,
     )
 }
-# Cierra/reabre limpio si Django intenta reutilizar conexión
-DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
-# Con pooler: deshabilitar cursores server-side
-DISABLE_SERVER_SIDE_CURSORS = True
-
-# SSL, timeouts y TCP keepalive (evitan sockets colgados)
-DATABASES["default"].setdefault("OPTIONS", {})
-DATABASES["default"]["OPTIONS"].update({
-    "sslmode": "require",                     # ya sea en URL o aquí
-    "connect_timeout": 5,                     # fallo rápido si el pooler está saturado
-    "options": "-c statement_timeout=15000",  # 15s por consulta
-
-    # Keepalives
-    "keepalives": 1,
-    "keepalives_idle": 30,
-    "keepalives_interval": 10,
-    "keepalives_count": 3,
-})
-
-# =========================
-# Passwords / i18n / estáticos
-# =========================
+# ====== Validaciones de Password ======
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -107,58 +87,38 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-LANGUAGE_CODE = "es"
-TIME_ZONE = "America/La_Paz"
+# ====== Internacionalización ======
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = "static/"
+# ====== Archivos estáticos ======
+STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
+# ====== Primary Key por defecto ======
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# =========================
-# DRF / JWT
-# =========================
+# ====== CORS ======
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",      # desarrollo local (Vite)
+    "http://127.0.0.1:5173",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+    # 👇 tu dominio de Vercel para producción del frontend
+    "https://smart-sales-frontend-c82v.vercel.app",
+]
+# 👉 Si quieres permitir previews de Vercel (opcionales), descomenta:
+# CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://.*\.vercel\.app$"]
+
+# ====== DRF (auth Supabase) ======
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-    ),
-    "DEFAULT_PERMISSION_CLASSES": (
-        "rest_framework.permissions.IsAuthenticated",
-    ),
-}
-
-ACCESS_MIN = int(os.getenv("JWT_ACCESS_MINUTES", "60"))
-REFRESH_D = int(os.getenv("JWT_REFRESH_DAYS", "7"))
-SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=ACCESS_MIN),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=REFRESH_D),
-    "AUTH_HEADER_TYPES": ("Bearer",),
-}
-
-# =========================
-# CORS / CSRF
-# =========================
-CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "True").lower() == "true"
-FRONTEND_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "").split(",") if o.strip()]
-if FRONTEND_ORIGINS:
-    CORS_ALLOW_ALL_ORIGINS = False
-    CORS_ALLOWED_ORIGINS = FRONTEND_ORIGINS
-
-CSRF_TRUSTED = [o.strip() for o in os.getenv("CSRF_TRUSTED", "").split(",") if o.strip()]
-if CSRF_TRUSTED:
-    CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED
-
-# (opcional) logging
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
-    "loggers": {
-        "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
-        "django.db.backends": {"handlers": ["console"], "level": "WARNING", "propagate": False},
-    },
-    "root": {"handlers": ["console"], "level": LOG_LEVEL},
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "smartsales.authsupabase.jwt.SupabaseJWTAuthentication",  # 👈 usa el JWT de Supabase (HS256)
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.AllowAny",
+    ],
 }
