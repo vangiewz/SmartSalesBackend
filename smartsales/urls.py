@@ -12,4 +12,10 @@ urlpatterns = [
         "password-reset/",
         include(("smartsales.RecuperarContrasena.urls", "recuperar_contrasena"), namespace="password_reset")
     ),
+    
+    # Módulo de roles de usuario
+    path("rolesusuario/",   include(("smartsales.rolesusuario.urls",   "rolesusuario"),   namespace="rolesusuario")),
+    
+    # Módulo de gestión de usuarios (solo Admin)
+    path("gestionusuario/", include(("smartsales.gestionusuario.urls", "gestionusuario"), namespace="gestionusuario")),
 ]
