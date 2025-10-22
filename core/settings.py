@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "corsheaders",
     # ====== tu app ======
     "smartsales",  # 👈 /auth/register, /auth/login, /auth/me
+    "smartsales.ai_reports"
 ]
 
 # ====== Middleware ======
