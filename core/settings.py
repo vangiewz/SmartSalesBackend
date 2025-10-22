@@ -158,13 +158,32 @@ LOGGING = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",      # desarrollo local (Vite)
     "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://localhost:5174",
     "http://localhost:5175",
     "http://127.0.0.1:5175",
     # 👇 tu dominio de Vercel para producción del frontend
     "https://smart-sales-frontend-c82v.vercel.app",
 ]
 # 👉 Si quieres permitir previews de Vercel (opcionales), descomenta:
-# CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://.*\.vercel\.app$"]
+CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://.*\.vercel\.app$"]
+
+CORS_ALLOW_HEADERS = [
+    "authorization",
+    "content-type",
+    "x-requested-with",
+]
+
+CORS_ALLOW_METHODS = [
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS",
+]
+
+CORS_ALLOW_CREDENTIALS = False  # No usas cookies; solo tokens por header
 
 # ====== DRF (auth Supabase) ======
 REST_FRAMEWORK = {
