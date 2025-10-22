@@ -19,9 +19,16 @@ urlpatterns = [
     # Módulo de gestión de usuarios (solo Admin)
     path("gestionusuario/", include(("smartsales.gestionusuario.urls", "gestionusuario"), namespace="gestionusuario")),
 
+    # Reportes con IA (tu rama ReportesIA)
     path(
         "ai-reports/",
         include(("smartsales.ai_reports.urls", "ai_reports"), namespace="ai_reports")
     ),
 
+    # Cambios que estaban en main
+    # Módulo de gestión de productos (Admin y Vendedor)
+    path("gestionproducto/", include(("smartsales.gestionproducto.urls", "gestionproducto"), namespace="gestionproducto")),
+
+    # Módulo de listado completo de productos para dashboard (Admin y Vendedor)
+    path("listadoproductos/", include(("smartsales.listadoproductos.urls", "listadoproductos"), namespace="listadoproductos")),
 ]
