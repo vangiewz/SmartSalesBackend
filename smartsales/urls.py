@@ -31,4 +31,13 @@ urlpatterns = [
 
     # Módulo de listado completo de productos para dashboard (Admin y Vendedor)
     path("listadoproductos/", include(("smartsales.listadoproductos.urls", "listadoproductos"), namespace="listadoproductos")),
+    
+    # Módulo de gestión de direcciones
+    path("direcciones/", include(("smartsales.direcciones.urls", "direcciones"), namespace="direcciones")),
+    
+    # Módulo de procesamiento de pagos con Stripe
+    path("pagos/", include(("smartsales.pagos.urls", "pagos"), namespace="pagos")),
+    
+    # Módulo de historial de pagos
+    path("historial-pagos/", include(("smartsales.historialpagos.urls", "historialpagos"), namespace="historialpagos")),
 ]
