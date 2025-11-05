@@ -40,4 +40,10 @@ urlpatterns = [
     
     # Módulo de historial de pagos
     path("historial-pagos/", include(("smartsales.historialpagos.urls", "historialpagos"), namespace="historialpagos")),
+
+    path(
+        "gestionclientes/",
+        include(("smartsales.gestionclientes.urls", "gestionclientes"), namespace="gestionclientes")
+    ),
+
 ]
