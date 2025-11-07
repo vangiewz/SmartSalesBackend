@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "smartsales.ai_reports",
     "smartsales.gestionclientes",
     "smartsales.ventas_historicas",
+    "smartsales.ml_ventas",
 ]
 
 # ====== Middleware ======

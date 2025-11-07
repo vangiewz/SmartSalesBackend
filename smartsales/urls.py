@@ -50,5 +50,10 @@ urlpatterns = [
         "ventas-historicas/",
         include(("smartsales.ventas_historicas.urls", "ventas_historicas"), namespace="ventas_historicas")
     ),
+    # Módulo de configuración del modelo de predicción (UC-25)
+    path(
+        "ml/",
+        include(("smartsales.ml_ventas.urls", "ml_ventas"), namespace="ml_ventas")
+    ),
 
 ]
