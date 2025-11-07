@@ -6,8 +6,10 @@ ROLE_ADMIN_NAME   = "Administrador"
 ROLE_VENDEDOR_NAME= "Vendedor"
 ROLE_ANALISTA_NAME= "Analista"
 ROLE_USUARIO_NAME = "Usuario"
+ROLE_TECNICO_NAME = "Técnico"
 
 ROLE_ADMIN_ID = 2  # atajo según semilla
+ROLE_TECNICO_ID = 5  # atajo según semilla
 
 def _fetch_role_id_by_name(role_name: str) -> Optional[int]:
     if not role_name:
@@ -74,6 +76,21 @@ class IsUsuarioRole(BasePermission):
     def has_permission(self, request, view):
         uid = getattr(request.user, "id", None)
         return user_has_role(uid, ROLE_USUARIO_NAME)
+
+class IsTecnicoRole(BasePermission):
+    """Permiso para usuarios con rol Técnico (ID: 5)"""
+    def has_permission(self, request, view):
+        uid = getattr(request.user, "id", None)
+        return user_has_role(uid, ROLE_TECNICO_ID) or user_has_role(uid, ROLE_TECNICO_NAME)
+
+class IsTecnicoOrAdminRole(BasePermission):
+    """Permiso para usuarios con rol Técnico (ID: 5) o Administrador (ID: 2)"""
+    def has_permission(self, request, view):
+        uid = getattr(request.user, "id", None)
+        return (user_has_role(uid, ROLE_TECNICO_ID) or 
+                user_has_role(uid, ROLE_TECNICO_NAME) or
+                user_has_role(uid, ROLE_ADMIN_ID) or
+                user_has_role(uid, ROLE_ADMIN_NAME))
 
 class HasAnyRole(BasePermission):
     required_roles: Tuple[Union[int, str], ...] = tuple()

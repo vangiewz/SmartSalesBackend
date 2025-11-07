@@ -41,6 +41,9 @@ urlpatterns = [
     # Módulo de historial de pagos
     path("historial-pagos/", include(("smartsales.historialpagos.urls", "historialpagos"), namespace="historialpagos")),
 
+    # Módulo de gestión de garantías y reclamos (Técnico)
+    path("garantia/", include(("smartsales.garantia.urls", "garantia"), namespace="garantia")),
+
     path(
         "gestionclientes/",
         include(("smartsales.gestionclientes.urls", "gestionclientes"), namespace="gestionclientes")
