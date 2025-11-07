@@ -46,4 +46,9 @@ urlpatterns = [
         include(("smartsales.gestionclientes.urls", "gestionclientes"), namespace="gestionclientes")
     ),
 
+    path(
+        "ventas-historicas/",
+        include(("smartsales.ventas_historicas.urls", "ventas_historicas"), namespace="ventas_historicas")
+    ),
+
 ]
