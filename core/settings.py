@@ -197,3 +197,5 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.AllowAny",
     ],
 }
+
+ML_MODELS_DIR = BASE_DIR / "ml_models"
