@@ -44,27 +44,43 @@ class TrainModeloView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+
 class PrediccionesModeloView(APIView):
     """
     POST /api/ml/predict/
+
     Genera predicciones de ventas futuras usando el modelo entrenado.
-    - Si se pasa {"horizonte_meses": X}, usa ese horizonte.
-    - Si no, usa el configurado en ml_config_prediccion.
+
+    Body esperado (JSON):
+      {
+        "modo": "total" | "categoria",   # opcional, por defecto "total"
+        "horizonte_meses": 3..24         # opcional, si no se envía usa el de la config
+      }
+
+    - modo = "total"     -> total mensual (usa el modelo entrenado y guardado).
+    - modo = "categoria" -> predicciones agregadas por categoría (tipoproducto).
     """
 
     def post(self, request, *args, **kwargs):
         try:
             horizonte = request.data.get("horizonte_meses")
-            result = services.generar_predicciones_ventas(horizonte_meses=horizonte)
+            modo = request.data.get("modo", "total")
+
+            # Usamos el wrapper general que decide qué tipo de predicción hacer
+            result = services.generar_predicciones_ventas_api(
+                modo=modo,
+                horizonte_meses=horizonte,
+            )
             return Response(result, status=status.HTTP_200_OK)
+
         except FileNotFoundError as e:
-            # No hay modelo entrenado aún
+            # No hay modelo entrenado aún (para modo = total)
             return Response(
                 {"detail": str(e), "code": "MODEL_NOT_TRAINED"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except ValueError as e:
-            # Errores esperados (sin suficientes datos)
+            # Errores esperados (sin suficientes datos, etc.)
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.exception("Error generando predicciones de ventas")
