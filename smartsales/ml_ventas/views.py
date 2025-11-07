@@ -43,3 +43,32 @@ class TrainModeloView(APIView):
                 {"detail": f"Error interno al entrenar el modelo de IA: {e}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+class PrediccionesModeloView(APIView):
+    """
+    POST /api/ml/predict/
+    Genera predicciones de ventas futuras usando el modelo entrenado.
+    - Si se pasa {"horizonte_meses": X}, usa ese horizonte.
+    - Si no, usa el configurado en ml_config_prediccion.
+    """
+
+    def post(self, request, *args, **kwargs):
+        try:
+            horizonte = request.data.get("horizonte_meses")
+            result = services.generar_predicciones_ventas(horizonte_meses=horizonte)
+            return Response(result, status=status.HTTP_200_OK)
+        except FileNotFoundError as e:
+            # No hay modelo entrenado aún
+            return Response(
+                {"detail": str(e), "code": "MODEL_NOT_TRAINED"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except ValueError as e:
+            # Errores esperados (sin suficientes datos)
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Error generando predicciones de ventas")
+            return Response(
+                {"detail": f"Error interno al generar predicciones: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

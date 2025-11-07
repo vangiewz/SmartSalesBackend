@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from django.conf import settings
 from django.db import connection
@@ -283,4 +283,116 @@ def entrenar_modelo_ventas() -> Dict[str, Any]:
         "filas_prueba": int(len(y_true)),
         "modelo_path": str(modelo_path),
         "feature_cols": feature_cols,
+    }
+
+
+# ---------------------------------------------------------
+# PREDICCIÓN BAJO DEMANDA (para visualizar predicciones)
+# ---------------------------------------------------------
+def generar_predicciones_ventas(horizonte_meses: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Genera predicciones de ventas futuras usando el último modelo entrenado
+    (sin re-entrenar) y devuelve:
+
+      - historico: lista con periodo, anio, mes, total_real
+      - predicciones: lista con periodo, anio, mes, total_predicho
+
+    Esto sirve tanto para el caso de uso de 'Generar predicción bajo demanda (API)'
+    como para 'Visualizar predicciones de ventas' en el frontend.
+    """
+    # 1) Determinar ruta del modelo entrenado (mismo esquema que entrenar_modelo_ventas)
+    base_dir = getattr(settings, "ML_MODELS_DIR", None)
+    if not base_dir:
+        root = getattr(settings, "MEDIA_ROOT", None)
+        if root:
+            base_dir = Path(root) / "ml_models"
+        else:
+            base_dir = Path(settings.BASE_DIR) / "ml_models"
+
+    base_dir = Path(base_dir)
+    modelo_path = base_dir / "modelo_ventas_rf.pkl"
+
+    if not modelo_path.exists():
+        raise FileNotFoundError(
+            "No se encontró un modelo entrenado. Debes entrenar el modelo antes de solicitar predicciones."
+        )
+
+    # 2) Cargar config e inferir horizonte
+    config = get_model_config()
+    if horizonte_meses is None:
+        horizonte = int(config["horizonte_meses"])
+    else:
+        horizonte = max(1, min(int(horizonte_meses), 24))  # forzamos 1..24
+
+    # 3) Cargar histórico y preparar features
+    df = load_ventas_dataframe()
+    if df.empty or len(df) < 5:
+        raise ValueError("No hay suficientes datos históricos para generar predicciones.")
+
+    df = df.sort_values("periodo").reset_index(drop=True)
+    df["t"] = df.index + 1
+
+    feature_cols = ["t", "mes", "anio"]
+
+    # Histórico completo (si quieres, luego en la vista podemos limitar a últimos 12)
+    historico = [
+        {
+            "periodo": row["periodo"].date().isoformat(),
+            "anio": int(row["anio"]),
+            "mes": int(row["mes"]),
+            "total_real": float(row["total"]),
+        }
+        for _, row in df.iterrows()
+    ]
+
+    # 4) Construir períodos futuros
+    last_period = pd.to_datetime(df["periodo"].max())
+    last_t = int(df["t"].max())
+
+    future_periods = pd.date_range(
+        last_period + pd.offsets.MonthBegin(1),
+        periods=horizonte,
+        freq="MS",
+    ).to_list()
+
+    future_rows = []
+    for i, per in enumerate(future_periods, start=1):
+        future_rows.append(
+            {
+                "periodo": per,
+                "anio": int(per.year),
+                "mes": int(per.month),
+                "t": last_t + i,
+            }
+        )
+
+    df_future = pd.DataFrame(future_rows)
+    X_future = df_future[feature_cols]
+
+    # 5) Cargar modelo entrenado y predecir
+    bundle = joblib.load(modelo_path)
+    # En entrenar_modelo_ventas guardamos {"model": model, ...}
+    model: RandomForestRegressor = bundle["model"]
+
+    y_pred = model.predict(X_future)
+
+    predicciones = []
+    for row, y_hat in zip(future_rows, y_pred):
+        predicciones.append(
+            {
+                "periodo": row["periodo"].date().isoformat(),
+                "anio": row["anio"],
+                "mes": row["mes"],
+                "total_predicho": float(y_hat),
+            }
+        )
+
+    return {
+        "status": "ok",
+        "modelo": config["nombre_modelo"],
+        "horizonte_meses": horizonte,
+        "feature_cols": feature_cols,
+        "filas_historico": len(historico),
+        "historico": historico,
+        "predicciones": predicciones,
     }
