@@ -37,7 +37,8 @@ INSTALLED_APPS = [
     # ====== tu app ======
     "smartsales",  # 👈 /auth/register, /auth/login, /auth/me
     "smartsales.ai_reports",
-    "smartsales.gestionclientes"
+    "smartsales.gestionclientes",
+    "smartsales.ventas_historicas",
 ]
 
 # ====== Middleware ======
