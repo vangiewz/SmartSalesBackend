@@ -158,7 +158,7 @@ def update_model_config(payload: Dict[str, Any], user_id=None) -> Dict[str, Any]
 
 
 # ---------------------------------------------------------
-# CARGA DE DATOS DE VENTAS
+# CARGA DE DATOS DE VENTAS (TOTAL MENSUAL)
 # ---------------------------------------------------------
 def load_ventas_dataframe() -> pd.DataFrame:
     """
@@ -189,7 +189,39 @@ def load_ventas_dataframe() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------
-# ENTRENAMIENTO DEL MODELO
+# CARGA DE DATOS DE VENTAS POR CATEGORÍA (tipoproducto)
+# ---------------------------------------------------------
+def load_ventas_categoria_dataframe() -> pd.DataFrame:
+    """
+    Construye un DataFrame agregando ventas por mes y categoría
+    (tipoproducto):
+
+      - periodo (primer día del mes)
+      - anio, mes
+      - categoria_id, categoria
+      - total en Bs
+    """
+    sql = """
+    SELECT
+      date_trunc('month', v.hora)     AS periodo,
+      EXTRACT(YEAR  FROM v.hora)::int AS anio,
+      EXTRACT(MONTH FROM v.hora)::int AS mes,
+      tp.id                           AS categoria_id,
+      tp.nombre                       AS categoria,
+      SUM(dv.cantidad * p.precio)     AS total
+    FROM venta v
+    JOIN detalleventa dv ON dv.venta_id   = v.id
+    JOIN producto      p ON p.id          = dv.producto_id
+    JOIN tipoproducto tp ON tp.id         = p.tipoproducto_id
+    GROUP BY 1,2,3,4,5
+    ORDER BY periodo, categoria;
+    """
+    df = pd.read_sql_query(sql, connection)
+    return df
+
+
+# ---------------------------------------------------------
+# ENTRENAMIENTO DEL MODELO (TOTAL MENSUAL)
 # ---------------------------------------------------------
 def entrenar_modelo_ventas() -> Dict[str, Any]:
     config = get_model_config()
@@ -287,7 +319,7 @@ def entrenar_modelo_ventas() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------
-# PREDICCIÓN BAJO DEMANDA (para visualizar predicciones)
+# PREDICCIÓN BAJO DEMANDA (TOTAL MENSUAL)
 # ---------------------------------------------------------
 def generar_predicciones_ventas(horizonte_meses: Optional[int] = None) -> Dict[str, Any]:
     """
@@ -334,7 +366,7 @@ def generar_predicciones_ventas(horizonte_meses: Optional[int] = None) -> Dict[s
 
     feature_cols = ["t", "mes", "anio"]
 
-    # Histórico completo (si quieres, luego en la vista podemos limitar a últimos 12)
+    # Histórico completo
     historico = [
         {
             "periodo": row["periodo"].date().isoformat(),
@@ -396,3 +428,166 @@ def generar_predicciones_ventas(horizonte_meses: Optional[int] = None) -> Dict[s
         "historico": historico,
         "predicciones": predicciones,
     }
+
+
+# ---------------------------------------------------------
+# PREDICCIÓN BAJO DEMANDA POR CATEGORÍA (tipoproducto)
+# ---------------------------------------------------------
+def generar_predicciones_ventas_por_categoria(
+    horizonte_meses: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Genera predicciones de ventas futuras desagregadas por categoría
+    (tipoproducto). Para simplificar, aquí entrenamos un RandomForest único
+    en el momento de la consulta usando como features:
+
+        - anio
+        - mes
+        - categoria_id
+
+    y devolvemos, para cada categoría, su histórico y sus predicciones.
+    """
+    config = get_model_config()
+
+    if horizonte_meses is None:
+        horizonte = int(config["horizonte_meses"])
+    else:
+        horizonte = max(1, min(int(horizonte_meses), 24))  # 1..24
+
+    df = load_ventas_categoria_dataframe()
+    if df.empty or len(df) < 5:
+        raise ValueError(
+            "No hay suficientes datos históricos para generar predicciones por categoría."
+        )
+
+    # Ordenamos por categoria y periodo
+    df = df.sort_values(["categoria_id", "periodo"]).reset_index(drop=True)
+
+    feature_cols = ["anio", "mes", "categoria_id"]
+    target_col = "total"
+
+    X = df[feature_cols]
+    y = df[target_col]
+
+    # Entrenamos un solo RandomForest para todas las categorías
+    model = RandomForestRegressor(
+        n_estimators=config["n_estimators"],
+        max_depth=config["max_depth"],
+        min_samples_split=config["min_samples_split"],
+        min_samples_leaf=config["min_samples_leaf"],
+        random_state=42,
+    )
+    model.fit(X, y)
+
+    # Fechas futuras (mismos períodos para todas las categorías)
+    last_period = pd.to_datetime(df["periodo"].max())
+    future_periods = pd.date_range(
+        last_period + pd.offsets.MonthBegin(1),
+        periods=horizonte,
+        freq="MS",
+    ).to_list()
+
+    # Catálogo de categorías
+    categorias_df = (
+        df[["categoria_id", "categoria"]]
+        .drop_duplicates()
+        .sort_values("categoria_id")
+    )
+
+    future_rows: List[Dict[str, Any]] = []
+    for _, row_cat in categorias_df.iterrows():
+        cat_id = int(row_cat["categoria_id"])
+        cat_nombre = str(row_cat["categoria"])
+        for per in future_periods:
+            future_rows.append(
+                {
+                    "periodo": per,
+                    "anio": int(per.year),
+                    "mes": int(per.month),
+                    "categoria_id": cat_id,
+                    "categoria": cat_nombre,
+                }
+            )
+
+    df_future = pd.DataFrame(future_rows)
+    X_future = df_future[feature_cols]
+
+    y_pred = model.predict(X_future)
+    df_future["total_predicho"] = y_pred.astype(float)
+
+    # Armamos estructura por categoría con histórico + predicciones
+    series_map: Dict[int, Dict[str, Any]] = {}
+
+    # Histórico por categoría
+    for (_, row) in df.iterrows():
+        cat_id = int(row["categoria_id"])
+        cat_nombre = str(row["categoria"])
+        serie = series_map.setdefault(
+            cat_id,
+            {
+                "categoria_id": cat_id,
+                "categoria": cat_nombre,
+                "historico": [],
+                "predicciones": [],
+            },
+        )
+        serie["historico"].append(
+            {
+                "periodo": row["periodo"].date().isoformat(),
+                "anio": int(row["anio"]),
+                "mes": int(row["mes"]),
+                "total_real": float(row["total"]),
+            }
+        )
+
+    # Predicciones por categoría
+    for (_, row) in df_future.iterrows():
+        cat_id = int(row["categoria_id"])
+        cat_nombre = str(row["categoria"])
+        serie = series_map.setdefault(
+            cat_id,
+            {
+                "categoria_id": cat_id,
+                "categoria": cat_nombre,
+                "historico": [],
+                "predicciones": [],
+            },
+        )
+        serie["predicciones"].append(
+            {
+                "periodo": row["periodo"].date().isoformat(),
+                "anio": int(row["anio"]),
+                "mes": int(row["mes"]),
+                "total_predicho": float(row["total_predicho"]),
+            }
+        )
+
+    series = list(series_map.values())
+
+    return {
+        "status": "ok",
+        "modelo": config["nombre_modelo"],
+        "horizonte_meses": horizonte,
+        "feature_cols": feature_cols,
+        "series": series,
+    }
+
+
+# ---------------------------------------------------------
+# WRAPPER GENERAL PARA EL ENDPOINT /ml/predict/
+# ---------------------------------------------------------
+def generar_predicciones_ventas_api(
+    modo: str = "total",
+    horizonte_meses: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Punto de entrada genérico para el endpoint /ml/predict/.
+
+    - modo = "total"     -> usa el modelo entrenado y devuelve total mensual.
+    - modo = "categoria" -> calcula y devuelve predicciones por categoría.
+    """
+    modo_norm = (modo or "total").lower()
+    if modo_norm == "categoria":
+        return generar_predicciones_ventas_por_categoria(horizonte_meses=horizonte_meses)
+    # por defecto, total mensual
+    return generar_predicciones_ventas(horizonte_meses=horizonte_meses)
