@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "smartsales.gestionclientes",
     "smartsales.ventas_historicas",
     "smartsales.ml_ventas",
+    "automation",
 ]
 
 # ====== Middleware ======
