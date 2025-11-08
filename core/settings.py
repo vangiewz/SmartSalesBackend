@@ -22,7 +22,7 @@ environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 # ====== Seguridad ======
 SECRET_KEY = env("SECRET_KEY")  # ⚠️ definido en .env o en Render
 DEBUG = env.bool("DEBUG", default=False)
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1", ".onrender.com"])
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1", ".onrender.com", ".ngrok-free.dev",])
 
 # ====== Aplicaciones ======
 INSTALLED_APPS = [
