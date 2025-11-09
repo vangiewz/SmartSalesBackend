@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "smartsales.ml_ventas",
     "automation",
     "smartsales.bitacora",
+    "django_extensions",
 ]
 
 # ====== Middleware ======
