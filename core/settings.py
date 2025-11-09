@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "smartsales.ventas_historicas",
     "smartsales.ml_ventas",
     "automation",
+    "smartsales.bitacora",
 ]
 
 # ====== Middleware ======

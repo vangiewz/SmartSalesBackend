@@ -69,4 +69,10 @@ urlpatterns = [
         include(("smartsales.carrito_voz.urls", "carrito_voz"), namespace="carrito_voz")
     ),
 
+path(
+    "bitacora/",
+    include(("smartsales.bitacora.urls", "bitacora"), namespace="bitacora")
+),
+
+
 ]
