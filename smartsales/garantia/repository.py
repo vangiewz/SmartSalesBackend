@@ -36,6 +36,15 @@ def get_producto_stock(producto_id: int) -> Optional[int]:
     )
     return int(row[0]) if row else None
 
+def get_producto_vendedor_id(producto_id: int) -> Optional[str]:
+    """Obtiene el id_vendedor de un producto"""
+    row = execute_query_with_retry(
+        "SELECT id_vendedor FROM producto WHERE id=%s",
+        [producto_id],
+        fetch_one=True
+    )
+    return str(row[0]) if row else None
+
 def descontar_stock(producto_id: int, cantidad: int) -> None:
     execute_query_with_retry(
         "UPDATE producto SET stock = stock - %s WHERE id=%s",

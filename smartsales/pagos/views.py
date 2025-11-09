@@ -343,14 +343,18 @@ class StripeWebhookView(APIView):
                     )
                     
                     # Crear detalles y actualizar stock
+                    productos_con_stock_bajo = []
                     for item in carrito:
                         producto_id = item['producto_id']
                         cantidad = item['cantidad']
                         
-                        cursor.execute("SELECT stock, tiempogarantia FROM producto WHERE id = %s", [producto_id])
+                        cursor.execute("SELECT stock, tiempogarantia, id_vendedor FROM producto WHERE id = %s", [producto_id])
                         row = cursor.fetchone()
                         if not row or row[0] < cantidad:
                             raise Exception(f"Stock insuficiente")
+                        
+                        stock_actual = row[0]
+                        id_vendedor = row[2]
                         
                         cursor.execute(
                             "INSERT INTO detalleventa (venta_id, producto_id, cantidad, limitegarantia) VALUES (%s, %s, %s, (SELECT hora FROM venta WHERE id = %s) + INTERVAL '1 day' * %s)",
@@ -358,12 +362,73 @@ class StripeWebhookView(APIView):
                         )
                         
                         cursor.execute("UPDATE producto SET stock = stock - %s WHERE id = %s", [cantidad, producto_id])
+                        
+                        # Verificar si el stock queda en 7 o menos
+                        nuevo_stock = stock_actual - cantidad
+                        if nuevo_stock <= 7:
+                            productos_con_stock_bajo.append({
+                                'producto_id': producto_id,
+                                'vendedor_id': id_vendedor,
+                                'stock_nuevo': nuevo_stock
+                            })
                     
                     print(f"[WEBHOOK] Venta {venta_id} creada para PI {payment_intent_id}")
-                    return Response({"status": "success", "venta_id": venta_id}, status=status.HTTP_200_OK)
+                    
+                    # Crear notificaciones fuera de la transacción principal
+                    from django.db import connection as notif_conn
+                    if notif_conn.connection is not None:
+                        # Usar una nueva conexión para notificaciones (no bloquear la transacción)
+                        pass
+                    
+                    # Devolver respuesta primero
+                    response_data = {"status": "success", "venta_id": venta_id}
+                    
+                    # Programar notificaciones después del commit
+                    transaction.on_commit(lambda: _enviar_notificaciones_post_venta(
+                        venta_id, usuario_id, total_pagado, productos_con_stock_bajo
+                    ))
+                    
+                    return Response(response_data, status=status.HTTP_200_OK)
                     
         except Exception as e:
             if 'unique constraint' in str(e).lower() or 'duplicate key' in str(e).lower():
                 return Response({"status": "already_processed"}, status=status.HTTP_200_OK)
             print(f"[WEBHOOK] Error: {str(e)}")
             return Response({"detail": "Error procesando pago"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _enviar_notificaciones_post_venta(venta_id, usuario_id, total_pagado, productos_con_stock_bajo):
+    """
+    Función helper para enviar notificaciones después de crear una venta
+    Se ejecuta después del commit de la transacción
+    """
+    try:
+        from smartsales.notificaciones.services import NotificacionManager
+        from smartsales.models import Venta
+        
+        # Obtener la venta completa
+        try:
+            venta = Venta.objects.get(id=venta_id)
+        except Venta.DoesNotExist:
+            print(f"[NOTIF] No se pudo encontrar venta {venta_id}")
+            return
+        
+        # 1. Notificar compra exitosa al comprador
+        NotificacionManager.notificar_compra_exitosa(venta)
+        print(f"[NOTIF] Notificación de compra enviada para venta {venta_id}")
+        
+        # 2. Notificar stock bajo a vendedores
+        if productos_con_stock_bajo:
+            from smartsales.models import Producto
+            for item in productos_con_stock_bajo:
+                try:
+                    producto = Producto.objects.get(id=item['producto_id'])
+                    NotificacionManager.notificar_stock_bajo(producto)
+                    print(f"[NOTIF] Notificación de stock bajo enviada para producto {item['producto_id']}")
+                except Producto.DoesNotExist:
+                    print(f"[NOTIF] No se pudo encontrar producto {item['producto_id']}")
+                    continue
+    
+    except Exception as e:
+        print(f"[NOTIF] Error al enviar notificaciones: {e}")
+        # No re-lanzar la excepción para no afectar el flujo principal
