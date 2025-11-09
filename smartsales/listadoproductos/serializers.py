@@ -1,4 +1,7 @@
+# smartsales/listadoproductos/serializers.py
 from rest_framework import serializers
+from smartsales.ventas_historicas.models import Producto, Marca, TipoProducto
+
 
 class ProductoListadoQuerySerializer(serializers.Serializer):
     """Serializer para filtros y búsqueda en el listado de productos"""
@@ -11,3 +14,40 @@ class ProductoListadoQuerySerializer(serializers.Serializer):
     max_stock = serializers.IntegerField(required=False, help_text="Stock máximo")
     page = serializers.IntegerField(required=False, min_value=1, default=1)
     page_size = serializers.IntegerField(required=False, min_value=1, max_value=100, default=20)
+
+
+class MarcaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Marca
+        fields = ["id", "nombre"]
+
+
+class TipoProductoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TipoProducto
+        fields = ["id", "nombre"]
+
+
+class ProductoCatalogoSerializer(serializers.ModelSerializer):
+    marca = MarcaSerializer(read_only=True)
+    tipoproducto = TipoProductoSerializer(read_only=True)
+    imagen_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Producto
+        fields = [
+            "id",
+            "nombre",
+            "precio",
+            "stock",
+            "marca",
+            "tipoproducto",
+            "imagen_url",
+        ]
+
+    def get_imagen_url(self, obj):
+        # De momento no tenemos URL pública real, solo usamos imagen_key como referencia
+        if getattr(obj, "imagen_key", None):
+            # aquí luego podrás construir una URL real al storage
+            return None
+        return None
