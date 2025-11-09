@@ -59,4 +59,14 @@ urlpatterns = [
         include(("smartsales.ml_ventas.urls", "ml_ventas"), namespace="ml_ventas")
     ),
 
+    path(
+        "carrito-voz/",
+        include(("smartsales.carrito_voz.urls", "carrito_voz"), namespace="carrito_voz")
+    ),
+
+    path(
+        "carrito-voz/",
+        include(("smartsales.carrito_voz.urls", "carrito_voz"), namespace="carrito_voz")
+    ),
+
 ]
