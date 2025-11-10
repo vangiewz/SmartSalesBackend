@@ -3,6 +3,7 @@ import json
 import stripe
 from decimal import Decimal
 from django.db import connection, transaction
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
@@ -143,10 +144,25 @@ class IniciarCheckoutView(APIView):
                 metadata=metadata,
                 description=f"Compra: {', '.join(descripcion_items[:3])}" + 
                            (f" y {len(descripcion_items) - 3} más" if len(descripcion_items) > 3 else ""),
-                automatic_payment_methods={
-                    'enabled': True,
-                }
+                payment_method_types=['card'],  # Especificar solo tarjetas (no requiere return_url)
             )
+            
+            # 🔥 AUTO-CONFIRMACIÓN PARA MÓVIL
+            # Detectar si la petición viene desde la app móvil
+            platform = request.META.get('HTTP_X_PLATFORM', '')
+            auto_confirm = platform == 'mobile' or settings.DEBUG
+            
+            if auto_confirm:
+                try:
+                    # Confirmar el Payment Intent con tarjeta de prueba de Stripe
+                    payment_intent = stripe.PaymentIntent.confirm(
+                        payment_intent.id,
+                        payment_method='pm_card_visa',  # Tarjeta de prueba: 4242 4242 4242 4242
+                    )
+                    print(f'✅ Payment Intent {payment_intent.id} confirmado automáticamente para móvil')
+                except stripe.error.StripeError as e:
+                    print(f'❌ Error al confirmar Payment Intent: {e}')
+                    # No hacer fail, dejar que el cliente lo intente
             
             return Response({
                 'clientSecret': payment_intent.client_secret,
@@ -186,142 +202,40 @@ class ConfirmarPagoView(APIView):
             # Verificar que el pago fue exitoso
             if payment_intent.status != 'succeeded':
                 return Response(
-                    {"detail": "El pago no se completó exitosamente."},
+                    {"detail": f"El pago no se completó exitosamente. Status: {payment_intent.status}"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Extraer metadata para buscar la venta
-            metadata = payment_intent.metadata
-            usuario_id = metadata['usuario_id']
-            direccion_texto = metadata['direccion_texto']
-            carrito = json.loads(metadata['carrito_json'])
-            total_pagado = Decimal(payment_intent.amount) / Decimal(100)
-            
-            # Buscar la venta creada por el webhook (con reintentos)
+            # Buscar la venta creada por el webhook usando payment_intent_id
             venta_id = None
-            max_intentos = 3
+            receipt_url = None
+            max_intentos = 5
             
             for intento in range(max_intentos):
                 with connection.cursor() as cursor:
                     cursor.execute(
                         """
-                        SELECT id FROM venta 
-                        WHERE usuario_id = %s 
-                        AND total = %s 
-                        AND direccion = %s
-                        AND hora >= NOW() - INTERVAL '10 minutes'
-                        ORDER BY hora DESC
-                        LIMIT 1
+                        SELECT venta_id, receipt_url 
+                        FROM pagos 
+                        WHERE payment_intent_id = %s
                         """,
-                        [usuario_id, total_pagado, direccion_texto]
+                        [payment_intent_id]
                     )
                     row = cursor.fetchone()
                     if row:
                         venta_id = row[0]
-                        print(f"[CONFIRMAR-PAGO] Venta encontrada: {venta_id}")
+                        receipt_url = row[1]
                         break
                 
-                # Si no encontró la venta y quedan intentos, esperar un poco
                 if not venta_id and intento < max_intentos - 1:
-                    print(f"[CONFIRMAR-PAGO] Venta no encontrada, esperando... (intento {intento + 1}/{max_intentos})")
                     import time
-                    time.sleep(1)  # Esperar 1 segundo
+                    time.sleep(1)
             
-            # Si después de los reintentos no existe, crearla UNA SOLA VEZ
             if not venta_id:
-                print(f"[CONFIRMAR-PAGO] Venta no encontrada después de {max_intentos} intentos, creando...")
-                
-                try:
-                    with transaction.atomic():
-                        with connection.cursor() as cursor:
-                            # Crear venta
-                            cursor.execute(
-                                """
-                                INSERT INTO venta (usuario_id, total, direccion)
-                                VALUES (%s, %s, %s)
-                                RETURNING id
-                                """,
-                                [usuario_id, total_pagado, direccion_texto]
-                            )
-                        venta_id = cursor.fetchone()[0]
-                        print(f"[CONFIRMAR-PAGO] Venta creada: {venta_id}")
-                        
-                        # Obtener URL del recibo de Stripe ANTES de crear el pago
-                        charge_id = payment_intent.latest_charge
-                        receipt_url = None
-                        if charge_id:
-                            try:
-                                charge = stripe.Charge.retrieve(charge_id)
-                                receipt_url = charge.receipt_url
-                                print(f"[CONFIRMAR-PAGO] Receipt URL obtenido: {receipt_url}")
-                            except Exception as e:
-                                print(f"[CONFIRMAR-PAGO] Error obteniendo receipt: {str(e)}")
-                        
-                        # Crear pago con receipt_url
-                        cursor.execute(
-                            """
-                            INSERT INTO pagos (venta_id, total, receipt_url)
-                            VALUES (%s, %s, %s)
-                            """,
-                            [venta_id, total_pagado, receipt_url]
-                        )
-                        
-                        # 3. Crear detalleventa y restar stock
-                        for item in carrito:
-                            producto_id = item['producto_id']
-                            cantidad = item['cantidad']
-                            
-                            # Obtener tiempogarantia
-                            cursor.execute(
-                                "SELECT tiempogarantia, stock FROM producto WHERE id = %s",
-                                [producto_id]
-                            )
-                            row = cursor.fetchone()
-                            if not row:
-                                raise Exception(f"Producto {producto_id} no encontrado")
-                            
-                            tiempo_garantia, stock_actual = row
-                            
-                            if cantidad > stock_actual:
-                                raise Exception(f"Stock insuficiente para producto {producto_id}")
-                            
-                            # Insertar detalle
-                            cursor.execute(
-                                """
-                                INSERT INTO detalleventa (venta_id, producto_id, cantidad, limitegarantia)
-                                VALUES (%s, %s, %s, 
-                                    (SELECT hora FROM venta WHERE id = %s) + INTERVAL '1 day' * %s
-                                )
-                                """,
-                                [venta_id, producto_id, cantidad, venta_id, tiempo_garantia]
-                            )
-                            
-                            # Restar stock
-                            cursor.execute(
-                                """
-                                UPDATE producto
-                                SET stock = stock - %s
-                                WHERE id = %s
-                                """,
-                                [cantidad, producto_id]
-                            )
-                except Exception as e:
-                    print(f"[CONFIRMAR-PAGO] Error creando venta: {str(e)}")
-                    return Response(
-                        {"detail": "Error al procesar la compra. Por favor contacta a soporte."},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
-            
-            # Obtener URL del recibo de Stripe
-            charge_id = payment_intent.latest_charge
-            receipt_url = None
-            
-            if charge_id:
-                try:
-                    charge = stripe.Charge.retrieve(charge_id)
-                    receipt_url = charge.receipt_url
-                except:
-                    pass
+                return Response(
+                    {"detail": "La venta aún no ha sido procesada. Intenta nuevamente en unos segundos."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
             return Response({
                 "status": "success",
@@ -333,6 +247,11 @@ class ConfirmarPagoView(APIView):
         except stripe.error.StripeError as e:
             return Response(
                 {"detail": f"Error al verificar pago con Stripe: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error inesperado: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -370,131 +289,146 @@ class StripeWebhookView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Procesar evento de pago completado
-        if event['type'] == 'payment_intent.succeeded':
-            payment_intent = event['data']['object']
-            payment_intent_id = payment_intent['id']
-            metadata = payment_intent['metadata']
-            
-            print(f"[WEBHOOK] Processing payment_intent.succeeded: {payment_intent_id}")
-            
-            # Extraer datos del metadata
-            usuario_id = metadata['usuario_id']
-            direccion_texto = metadata['direccion_texto']
-            carrito = json.loads(metadata['carrito_json'])
-            total_pagado = Decimal(payment_intent['amount']) / Decimal(100)
-            
-            # ===== VERIFICAR SI YA EXISTE LA VENTA =====
-            # Evitar duplicados si el webhook se llama múltiples veces
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT id FROM venta 
-                    WHERE usuario_id = %s 
-                    AND total = %s 
-                    AND direccion = %s
-                    AND hora >= NOW() - INTERVAL '1 minute'
-                    LIMIT 1
-                    """,
-                    [usuario_id, total_pagado, direccion_texto]
-                )
-                venta_existente = cursor.fetchone()
-                
-                if venta_existente:
-                    print(f"[WEBHOOK] Venta ya existe: {venta_existente[0]}")
-                    return Response({"status": "already_processed"}, status=status.HTTP_200_OK)
-            
-            # ===== TRANSACCIÓN ATÓMICA =====
-            try:
-                with transaction.atomic():
-                    with connection.cursor() as cursor:
-                        # 1. Crear venta
-                        cursor.execute(
-                            """
-                            INSERT INTO venta (usuario_id, total, direccion)
-                            VALUES (%s, %s, %s)
-                            RETURNING id
-                            """,
-                            [usuario_id, total_pagado, direccion_texto]
-                        )
-                        venta_id = cursor.fetchone()[0]
-                        print(f"[WEBHOOK] Venta creada: {venta_id}")
-                        
-                        # Obtener URL del recibo de Stripe
-                        charge_id = payment_intent.get('latest_charge')
-                        receipt_url = None
-                        if charge_id:
-                            try:
-                                charge = stripe.Charge.retrieve(charge_id)
-                                receipt_url = charge.receipt_url
-                                print(f"[WEBHOOK] Receipt URL obtenido: {receipt_url}")
-                            except Exception as e:
-                                print(f"[WEBHOOK] Error obteniendo receipt: {str(e)}")
-                        
-                        # Crear pago con receipt_url
-                        cursor.execute(
-                            """
-                            INSERT INTO pagos (venta_id, total, receipt_url)
-                            VALUES (%s, %s, %s)
-                            """,
-                            [venta_id, total_pagado, receipt_url]
-                        )
-                        
-                        # 3. Crear detalleventa y restar stock
-                        for item in carrito:
-                            producto_id = item['producto_id']
-                            cantidad = item['cantidad']
-                            
-                            # Re-validar stock y obtener tiempogarantia
-                            cursor.execute(
-                                "SELECT nombre, stock, tiempogarantia FROM producto WHERE id = %s",
-                                [producto_id]
-                            )
-                            row = cursor.fetchone()
-                            
-                            if not row:
-                                raise Exception(f"Producto {producto_id} no encontrado")
-                            
-                            nombre_producto, stock_actual, tiempo_garantia = row
-                            
-                            if cantidad > stock_actual:
-                                raise Exception(
-                                    f"Stock insuficiente para '{nombre_producto}'. "
-                                    f"Disponible: {stock_actual}, Solicitado: {cantidad}"
-                                )
-                            
-                            # Insertar detalle de venta
-                            # limitegarantia = hora_venta + tiempogarantia días
-                            cursor.execute(
-                                """
-                                INSERT INTO detalleventa (venta_id, producto_id, cantidad, limitegarantia)
-                                VALUES (%s, %s, %s, 
-                                    (SELECT hora FROM venta WHERE id = %s) + INTERVAL '1 day' * %s
-                                )
-                                """,
-                                [venta_id, producto_id, cantidad, venta_id, tiempo_garantia]
-                            )
-                            
-                            cursor.execute(
-                                """
-                                UPDATE producto
-                                SET stock = stock - %s
-                                WHERE id = %s
-                                """,
-                                [cantidad, producto_id]
-                            )
-                            
-                            print(f"[WEBHOOK] Producto {producto_id}: stock actualizado (-{cantidad})")
-                
-                print(f"[WEBHOOK] Procesamiento exitoso para venta {venta_id}")
-                return Response({"status": "success", "venta_id": venta_id}, status=status.HTTP_200_OK)
-                
-            except Exception as e:
-                print(f"[WEBHOOK] Error procesando webhook: {str(e)}")
-                return Response(
-                    {"detail": "Error al procesar el pago."},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+        # Procesar SOLO el evento payment_intent.succeeded (ignorar todos los demás)
+        if event['type'] != 'payment_intent.succeeded':
+            return Response({"status": "ignored"}, status=status.HTTP_200_OK)
         
-        # Otros tipos de eventos (ignorar)
-        return Response({"status": "ignored"}, status=status.HTTP_200_OK)
+        payment_intent = event['data']['object']
+        payment_intent_id = payment_intent['id']
+        metadata = payment_intent['metadata']
+        
+        # Extraer datos del metadata
+        usuario_id = metadata['usuario_id']
+        direccion_texto = metadata['direccion_texto']
+        carrito = json.loads(metadata['carrito_json'])
+        total_pagado = Decimal(payment_intent['amount']) / Decimal(100)
+        
+        # Lock por payment_intent_id
+        import hashlib
+        lock_id = int(hashlib.md5(payment_intent_id.encode()).hexdigest()[:15], 16) % 2147483647
+        
+        try:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    # Adquirir lock
+                    cursor.execute("SELECT pg_advisory_xact_lock(%s)", [lock_id])
+                    
+                    # Verificar si ya existe
+                    cursor.execute("SELECT venta_id FROM pagos WHERE payment_intent_id = %s", [payment_intent_id])
+                    existing = cursor.fetchone()
+                    if existing:
+                        return Response({"status": "already_processed"}, status=status.HTTP_200_OK)
+                    
+                    # Crear venta
+                    cursor.execute(
+                        "INSERT INTO venta (usuario_id, total, direccion) VALUES (%s, %s, %s) RETURNING id",
+                        [usuario_id, total_pagado, direccion_texto]
+                    )
+                    venta_id = cursor.fetchone()[0]
+                    
+                    # Obtener receipt
+                    receipt_url = None
+                    charge_id = payment_intent.get('latest_charge')
+                    if charge_id:
+                        try:
+                            charge = stripe.Charge.retrieve(charge_id)
+                            receipt_url = charge.receipt_url
+                        except:
+                            pass
+                    
+                    # Crear pago
+                    cursor.execute(
+                        "INSERT INTO pagos (venta_id, total, receipt_url, payment_intent_id) VALUES (%s, %s, %s, %s)",
+                        [venta_id, total_pagado, receipt_url, payment_intent_id]
+                    )
+                    
+                    # Crear detalles y actualizar stock
+                    productos_con_stock_bajo = []
+                    for item in carrito:
+                        producto_id = item['producto_id']
+                        cantidad = item['cantidad']
+                        
+                        cursor.execute("SELECT stock, tiempogarantia, id_vendedor FROM producto WHERE id = %s", [producto_id])
+                        row = cursor.fetchone()
+                        if not row or row[0] < cantidad:
+                            raise Exception(f"Stock insuficiente")
+                        
+                        stock_actual = row[0]
+                        id_vendedor = row[2]
+                        
+                        cursor.execute(
+                            "INSERT INTO detalleventa (venta_id, producto_id, cantidad, limitegarantia) VALUES (%s, %s, %s, (SELECT hora FROM venta WHERE id = %s) + INTERVAL '1 day' * %s)",
+                            [venta_id, producto_id, cantidad, venta_id, row[1]]
+                        )
+                        
+                        cursor.execute("UPDATE producto SET stock = stock - %s WHERE id = %s", [cantidad, producto_id])
+                        
+                        # Verificar si el stock queda en 7 o menos
+                        nuevo_stock = stock_actual - cantidad
+                        if nuevo_stock <= 7:
+                            productos_con_stock_bajo.append({
+                                'producto_id': producto_id,
+                                'vendedor_id': id_vendedor,
+                                'stock_nuevo': nuevo_stock
+                            })
+                    
+                    print(f"[WEBHOOK] Venta {venta_id} creada para PI {payment_intent_id}")
+                    
+                    # Crear notificaciones fuera de la transacción principal
+                    from django.db import connection as notif_conn
+                    if notif_conn.connection is not None:
+                        # Usar una nueva conexión para notificaciones (no bloquear la transacción)
+                        pass
+                    
+                    # Devolver respuesta primero
+                    response_data = {"status": "success", "venta_id": venta_id}
+                    
+                    # Programar notificaciones después del commit
+                    transaction.on_commit(lambda: _enviar_notificaciones_post_venta(
+                        venta_id, usuario_id, total_pagado, productos_con_stock_bajo
+                    ))
+                    
+                    return Response(response_data, status=status.HTTP_200_OK)
+                    
+        except Exception as e:
+            if 'unique constraint' in str(e).lower() or 'duplicate key' in str(e).lower():
+                return Response({"status": "already_processed"}, status=status.HTTP_200_OK)
+            print(f"[WEBHOOK] Error: {str(e)}")
+            return Response({"detail": "Error procesando pago"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _enviar_notificaciones_post_venta(venta_id, usuario_id, total_pagado, productos_con_stock_bajo):
+    """
+    Función helper para enviar notificaciones después de crear una venta
+    Se ejecuta después del commit de la transacción
+    """
+    try:
+        from smartsales.notificaciones.services import NotificacionManager
+        from smartsales.models import Venta
+        
+        # Obtener la venta completa
+        try:
+            venta = Venta.objects.get(id=venta_id)
+        except Venta.DoesNotExist:
+            print(f"[NOTIF] No se pudo encontrar venta {venta_id}")
+            return
+        
+        # 1. Notificar compra exitosa al comprador
+        NotificacionManager.notificar_compra_exitosa(venta)
+        print(f"[NOTIF] Notificación de compra enviada para venta {venta_id}")
+        
+        # 2. Notificar stock bajo a vendedores
+        if productos_con_stock_bajo:
+            from smartsales.models import Producto
+            for item in productos_con_stock_bajo:
+                try:
+                    producto = Producto.objects.get(id=item['producto_id'])
+                    NotificacionManager.notificar_stock_bajo(producto)
+                    print(f"[NOTIF] Notificación de stock bajo enviada para producto {item['producto_id']}")
+                except Producto.DoesNotExist:
+                    print(f"[NOTIF] No se pudo encontrar producto {item['producto_id']}")
+                    continue
+    
+    except Exception as e:
+        print(f"[NOTIF] Error al enviar notificaciones: {e}")
+        # No re-lanzar la excepción para no afectar el flujo principal

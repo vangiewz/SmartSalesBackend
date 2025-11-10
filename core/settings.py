@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "smartsales.gestionclientes",
     "smartsales.ventas_historicas",
     "smartsales.ml_ventas",
+    "smartsales.notificaciones",  # 👈 Sistema de notificaciones
     "automation",
     "smartsales.bitacora",
     "django_extensions",
@@ -178,6 +179,7 @@ CORS_ALLOW_HEADERS = [
     "authorization",
     "content-type",
     "x-requested-with",
+    "x-platform",  # 👈 Header personalizado para modo móvil
 ]
 
 CORS_ALLOW_METHODS = [
@@ -202,3 +204,11 @@ REST_FRAMEWORK = {
 }
 
 ML_MODELS_DIR = BASE_DIR / "ml_models"
+
+# ====== Notificaciones ======
+# Firebase Cloud Messaging (para push notifications)
+FIREBASE_CREDENTIALS_PATH = env("FIREBASE_CREDENTIALS_PATH", default=None)  # Ruta al archivo JSON de Firebase
+
+# SendGrid (para notificaciones por email)
+SENDGRID_API_KEY = env("SENDGRID_API_KEY", default=None)
+SENDGRID_FROM_EMAIL = env("SENDGRID_FROM_EMAIL", default="notificaciones@smartsales.com")

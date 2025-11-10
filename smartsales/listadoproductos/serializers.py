@@ -1,7 +1,7 @@
 # smartsales/listadoproductos/serializers.py
-import os
 from rest_framework import serializers
 from smartsales.ventas_historicas.models import Producto, Marca, TipoProducto
+from smartsales.gestionproducto.storage import public_url
 
 
 class ProductoListadoQuerySerializer(serializers.Serializer):
@@ -43,25 +43,15 @@ class ProductoCatalogoSerializer(serializers.ModelSerializer):
             "stock",
             "marca",
             "tipoproducto",
-            "imagen_key",   # 👈 también mandamos la key
-            "imagen_url",   # 👈 URL completa construida aquí
+            "imagen_key",   # 👈 se envía la key cruda (por si la necesitas)
+            "imagen_url",   # 👈 URL completa construida en get_imagen_url
         ]
 
     def get_imagen_url(self, obj):
         """
-        Construye la URL pública a partir de imagen_key usando SUPABASE_URL
-        para que el frontend no tenga que conocer Supabase.
+        Construye la URL pública de la imagen usando public_url de storage.
+        Así el frontend recibe una URL lista para usar.
         """
-        key = getattr(obj, "imagen_key", None)
-        if not key:
-            return None
-
-        base_url = os.getenv("SUPABASE_URL")  # el mismo que usas en tus scripts Python
-
-        if not base_url:
-            # Si por algún motivo no está configurado, devolvemos la key cruda
-            # (el frontend igual puede intentar usarla)
-            return key
-
-        # Ej: https://TU-PROYECTO.supabase.co/storage/v1/object/public/productos/uuid/14.jpeg
-        return f"{base_url}/storage/v1/object/public/productos/{key}"
+        if getattr(obj, "imagen_key", None):
+            return public_url(obj.imagen_key)
+        return None

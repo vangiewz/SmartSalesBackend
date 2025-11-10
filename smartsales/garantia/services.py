@@ -4,7 +4,7 @@ from smartsales.garantia import messages as MSG
 from smartsales.garantia.repository import (
     get_venta_usuario_id, get_detalleventa, insert_garantia,
     get_garantia, get_garantia_detalle, set_garantia_estado, get_producto_stock, descontar_stock,
-    list_garantias, get_producto_info
+    list_garantias, get_producto_info, get_producto_vendedor_id
 )
 
 # Para URL pública de imagen de producto (si el front la usa)
@@ -105,11 +105,13 @@ def evaluar_reclamo(tecnico_id: str, venta_id: int, producto_id: int, garantia_i
     # Rechazo
     if reemplazo is None:
         set_garantia_estado(venta_id, producto_id, garantia_id, "Rechazado", None)
+        _enviar_notificacion_garantia(venta_id, producto_id, garantia_id)
         return _payload_from_db(venta_id, producto_id, garantia_id)
 
     # Reparación (no stock)
     if reemplazo is False:
         set_garantia_estado(venta_id, producto_id, garantia_id, "Completado", False)
+        _enviar_notificacion_garantia(venta_id, producto_id, garantia_id)
         return _payload_from_db(venta_id, producto_id, garantia_id)
 
     # Reemplazo (validar stock y descontar)
@@ -117,7 +119,30 @@ def evaluar_reclamo(tecnico_id: str, venta_id: int, producto_id: int, garantia_i
     if stock is None or stock < cantidad:
         raise ValueError(MSG.ERR_NO_STOCK)
     descontar_stock(producto_id, cantidad)
+    
+    # Verificar si el stock quedó bajo (≤ 7) y notificar al vendedor
+    stock_restante = get_producto_stock(producto_id)
+    if stock_restante is not None and stock_restante <= 7:
+        try:
+            from smartsales.notificaciones.services.notificacion_manager import NotificacionManager
+            from smartsales.garantia.repository import get_producto_vendedor_id
+            vendedor_id = get_producto_vendedor_id(producto_id)
+            if vendedor_id:
+                producto_info = get_producto_info(producto_id)
+                if producto_info:
+                    _stock, nombre_producto, _img = producto_info
+                    NotificacionManager.notificar_stock_bajo(
+                        vendedor_id=str(vendedor_id),
+                        producto_id=producto_id,
+                        producto_nombre=nombre_producto,
+                        stock_actual=stock_restante
+                    )
+        except Exception as e:
+            # No fallar si la notificación falla
+            print(f"Error al notificar stock bajo en garantía: {e}")
+    
     set_garantia_estado(venta_id, producto_id, garantia_id, "Completado", True)
+    _enviar_notificacion_garantia(venta_id, producto_id, garantia_id)
 
     return _payload_from_db(venta_id, producto_id, garantia_id)
 
@@ -179,3 +204,54 @@ def listar(user_id: Optional[str], scope: str, filtros: dict) -> Dict[str, Any]:
         })
     return {"count": total, "results": results}
 
+
+def _enviar_notificacion_garantia(venta_id: int, producto_id: int, garantia_id: int):
+    """
+    Función helper para enviar notificaciones cuando cambia el estado de una garantía
+    """
+    try:
+        from smartsales.notificaciones.services import NotificacionManager
+        from smartsales.models import Garantia, Venta
+        from django.db import connection
+        
+        # Obtener la garantía usando raw SQL (ya que el modelo usa PK compuesta)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT g.id, g.venta_id, g.producto_id, g.estadogarantia_id, g.hora
+                FROM garantia g
+                WHERE g.venta_id = %s AND g.producto_id = %s AND g.id = %s
+                """,
+                [venta_id, producto_id, garantia_id]
+            )
+            row = cursor.fetchone()
+            
+            if not row:
+                print(f"[NOTIF] No se pudo encontrar garantía {garantia_id}")
+                return
+            
+            # Obtener la venta para obtener el usuario_id
+            try:
+                venta = Venta.objects.get(id=venta_id)
+            except Venta.DoesNotExist:
+                print(f"[NOTIF] No se pudo encontrar venta {venta_id}")
+                return
+            
+            # Crear objeto garantía simulado para pasar al manager
+            class GarantiaSimulada:
+                def __init__(self, data):
+                    self.id = data[0]
+                    self.venta_id = data[1]
+                    self.producto_id = data[2]
+                    self.estadogarantia_id = data[3]
+                    self.hora = data[4]
+            
+            garantia_obj = GarantiaSimulada(row)
+            
+            # Enviar notificación
+            NotificacionManager.notificar_cambio_garantia(garantia_obj, venta)
+            print(f"[NOTIF] Notificación de garantía enviada para garantía {garantia_id}")
+    
+    except Exception as e:
+        print(f"[NOTIF] Error al enviar notificación de garantía: {e}")
+        # No re-lanzar la excepción para no afectar el flujo principal
