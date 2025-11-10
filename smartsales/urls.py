@@ -98,4 +98,10 @@ urlpatterns = [
         include(("smartsales.dashboard_ejecutivo.urls", "dashboard_ejecutivo"), namespace="dashboard_ejecutivo")
     ),
 
+    # Gestión de catálogos (Tipos de Producto y Marcas) - Solo Administrador
+    path(
+        "gestion-catalogos/",
+        include(("smartsales.gestion_catalogos.urls", "gestion_catalogos"), namespace="gestion_catalogos")
+    ),
+
 ]
