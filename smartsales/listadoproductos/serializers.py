@@ -43,13 +43,15 @@ class ProductoCatalogoSerializer(serializers.ModelSerializer):
             "stock",
             "marca",
             "tipoproducto",
-            "imagen_url",
+            "imagen_key",   # 👈 se envía la key cruda (por si la necesitas)
+            "imagen_url",   # 👈 URL completa construida en get_imagen_url
         ]
 
     def get_imagen_url(self, obj):
         """
-        Construye la URL pública de la imagen usando public_url de storage
+        Construye la URL pública de la imagen usando public_url de storage.
+        Así el frontend recibe una URL lista para usar.
         """
-        if obj.imagen_key:
+        if getattr(obj, "imagen_key", None):
             return public_url(obj.imagen_key)
         return None

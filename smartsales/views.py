@@ -1,5 +1,7 @@
 from django.db import connection, transaction
 from django.db.utils import OperationalError, InterfaceError, DatabaseError
+from django.utils import timezone
+from datetime import timedelta
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -81,6 +83,9 @@ class RegisterView(APIView):
             },
         }, status=status.HTTP_201_CREATED)
 
+MAX_INTENTOS = 3
+BLOQUEO_MINUTOS = 15
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -89,103 +94,99 @@ class LoginView(APIView):
         s.is_valid(raise_exception=True)
         email = s.validated_data["email"].strip().lower()
         password = s.validated_data["password"]
+        now = timezone.now()
 
-        # 1) Tokens desde Supabase
+        # 1️⃣ Verificar si el usuario está bloqueado
+        with connection.cursor() as cur:
+            cur.execute("""
+                SELECT intentos, bloqueado_hasta
+                FROM login_bloqueo
+                WHERE lower(email) = lower(%s)
+            """, [email])
+            row = cur.fetchone()
+
+        if row:
+            intentos, bloqueado_hasta = row
+            if bloqueado_hasta and bloqueado_hasta > now:
+                minutos = int((bloqueado_hasta - now).total_seconds() // 60) + 1
+                return Response(
+                    {"detail": f"Has excedido los intentos de acceso. Vuelve a intentarlo en {minutos} minuto(s)."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                )
+        else:
+            intentos = 0
+
+        # 2️⃣ Intentar login normal (usa tu función actual sign_in_password)
         try:
             token_data = sign_in_password(email, password)
         except SupabaseError:
-            return Response({"detail": "Credenciales inválidas."}, status=401)
+            token_data = None
 
-        # 2) Perfil + roles con retry manual más robusto
-        max_retries = 5  # Aumentado a 5 intentos
-        last_error = None
-        
-        for attempt in range(max_retries):
-            try:
-                # Forzar cierre de conexión antes de cada intento
-                connection.close()
-                
-                # Esperar un poco más si no es el primer intento
-                if attempt > 0:
-                    import time
-                    wait_time = min(2 ** attempt, 5)  # Max 5 segundos
-                    logger.info(f"Waiting {wait_time}s before attempt {attempt + 1}/{max_retries}...")
-                    time.sleep(wait_time)
-                
-                # Obtener perfil
-                with connection.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT u.id, u.nombre, u.telefono, u.correo
-                        FROM usuario u
-                        WHERE lower(u.correo) = lower(%s)
-                        """,
-                        [email],
-                    )
-                    row = cur.fetchone()
+        if not token_data:
+            intentos += 1
+            bloqueado_hasta = None
+            if intentos >= MAX_INTENTOS:
+                bloqueado_hasta = now + timedelta(minutes=BLOQUEO_MINUTOS)
 
-                if row:
-                    user_id, nombre, telefono, correo = row
-                    
-                    # Obtener roles
-                    with connection.cursor() as cur:
-                        cur.execute(
-                            """
-                            SELECT r.nombre
-                            FROM roles r
-                            JOIN rolesusuario ru ON ru.rol_id = r.id
-                            WHERE ru.usuario_id = %s
-                            """,
-                            [user_id],
-                        )
-                        roles = [r[0] for r in cur.fetchall()]
-                else:
-                    user_id, nombre, telefono, correo, roles = None, None, None, email, []
+            with connection.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO login_bloqueo (email, intentos, bloqueado_hasta, actualizado_en)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (email)
+                    DO UPDATE SET intentos=%s, bloqueado_hasta=%s, actualizado_en=%s
+                """, [email, intentos, bloqueado_hasta, now, intentos, bloqueado_hasta, now])
 
-                # Si llegamos aquí, la operación fue exitosa
-                perfil = {
-                    "id": user_id,
-                    "correo": correo,
-                    "nombre": nombre,
-                    "telefono": telefono,
-                    "roles": roles,
-                }
+            if intentos >= MAX_INTENTOS:
+                return Response(
+                    {"detail": f"Has fallado el inicio de sesión {MAX_INTENTOS} veces. Tu cuenta estará bloqueada durante {BLOQUEO_MINUTOS} minutos."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                )
 
-                return Response({
-                    "user": perfil,
-                    "tokens": {
-                        "access": token_data.get("access_token"),
-                        "refresh": token_data.get("refresh_token"),
-                        "token_type": token_data.get("token_type", "bearer"),
-                        "expires_in": token_data.get("expires_in"),
-                    },
-                })
-                
-            except (OperationalError, InterfaceError, DatabaseError) as e:
-                last_error = e
-                error_msg = str(e).lower()
-                
-                logger.warning(f"Login DB error on attempt {attempt + 1}/{max_retries}: {error_msg}")
-                
-                # Verificar si es un error de conexión
-                is_connection_error = any(keyword in error_msg for keyword in [
-                    'connection', 'timeout', 'closed', 'terminating',
-                    'pool', 'server closed', 'broken pipe', 'unexpectedly'
-                ])
-                
-                if is_connection_error and attempt < max_retries - 1:
-                    # Continuar al siguiente intento (ya esperamos arriba)
-                    connection.close()
-                    continue
-                else:
-                    # Si no es error de conexión o agotamos intentos
-                    logger.error(f"Login failed after {attempt + 1} attempts: {error_msg}")
-                    raise
-        
-        # Si salimos del loop sin éxito
-        if last_error:
-            raise last_error
+            return Response({"detail": "Correo o contraseña incorrectos."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # 3️⃣ Si login correcto → limpiar intentos
+        with connection.cursor() as cur:
+            cur.execute("DELETE FROM login_bloqueo WHERE lower(email) = lower(%s)", [email])
+
+        # 4️⃣ Cargar perfil (copiado de tu código actual)
+        with connection.cursor() as cur:
+            cur.execute("""
+                SELECT u.id, u.nombre, u.telefono, u.correo
+                FROM usuario u
+                WHERE lower(u.correo) = lower(%s)
+            """, [email])
+            row = cur.fetchone()
+
+        if row:
+            user_id, nombre, telefono, correo = row
+            with connection.cursor() as cur:
+                cur.execute("""
+                    SELECT r.nombre
+                    FROM roles r
+                    JOIN rolesusuario ru ON ru.rol_id = r.id
+                    WHERE ru.usuario_id = %s
+                """, [user_id])
+                roles = [r[0] for r in cur.fetchall()]
+        else:
+            user_id, nombre, telefono, correo, roles = None, None, None, email, []
+
+        perfil = {
+            "id": user_id,
+            "correo": correo,
+            "nombre": nombre,
+            "telefono": telefono,
+            "roles": roles,
+        }
+
+        return Response({
+            "user": perfil,
+            "tokens": {
+                "access": token_data.get("access_token"),
+                "refresh": token_data.get("refresh_token"),
+                "token_type": token_data.get("token_type", "bearer"),
+                "expires_in": token_data.get("expires_in"),
+            },
+        }, status=status.HTTP_200_OK)
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 

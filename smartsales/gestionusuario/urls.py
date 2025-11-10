@@ -5,6 +5,8 @@ from .views import (
     UsuarioRolesView,      # PUT/POST en el mismo path
     UsuarioRolDeleteView,  # DELETE con rol_id
     UsuarioDeleteView,     # DELETE usuario
+    MiPerfilView,                # 👈 IMPORTAR
+    UsuarioChangePasswordView,   # 👈 IMPORTAR
 )
 
 urlpatterns = [
@@ -13,4 +15,7 @@ urlpatterns = [
     path("usuarios/<uuid:user_id>/roles", UsuarioRolesView.as_view(), name="gu_usuario_roles"),          # PUT/POST
     path("usuarios/<uuid:user_id>/roles/<int:rol_id>", UsuarioRolDeleteView.as_view(), name="gu_usuario_rol_del"),
     path("usuarios/<uuid:user_id>", UsuarioDeleteView.as_view(), name="gu_usuario_delete"),
+
+    path("mi-perfil/", MiPerfilView.as_view(), name="mi-perfil"),
+    path("mi-perfil/cambiar-password/", UsuarioChangePasswordView.as_view(), name="mi-perfil-cambiar-password"),
 ]
