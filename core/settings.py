@@ -179,6 +179,7 @@ CORS_ALLOW_HEADERS = [
     "authorization",
     "content-type",
     "x-requested-with",
+    "x-platform",  # 👈 Header personalizado para modo móvil
 ]
 
 CORS_ALLOW_METHODS = [

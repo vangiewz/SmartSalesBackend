@@ -1,6 +1,7 @@
 # smartsales/listadoproductos/serializers.py
 from rest_framework import serializers
 from smartsales.ventas_historicas.models import Producto, Marca, TipoProducto
+from smartsales.gestionproducto.storage import public_url
 
 
 class ProductoListadoQuerySerializer(serializers.Serializer):
@@ -46,8 +47,9 @@ class ProductoCatalogoSerializer(serializers.ModelSerializer):
         ]
 
     def get_imagen_url(self, obj):
-        # De momento no tenemos URL pública real, solo usamos imagen_key como referencia
-        if getattr(obj, "imagen_key", None):
-            # aquí luego podrás construir una URL real al storage
-            return None
+        """
+        Construye la URL pública de la imagen usando public_url de storage
+        """
+        if obj.imagen_key:
+            return public_url(obj.imagen_key)
         return None

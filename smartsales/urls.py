@@ -80,4 +80,22 @@ urlpatterns = [
         include(("smartsales.notificaciones.urls", "notificaciones"), namespace="notificaciones")
     ),
 
+    # CU-15: Módulo de venta manual (POS/Mostrador) - Solo Vendedores
+    path(
+        "venta-manual/",
+        include(("smartsales.venta_manual.urls", "venta_manual"), namespace="venta_manual")
+    ),
+
+    # CU-7: Módulo de catálogo (Importar/Exportar) - Solo Vendedores
+    path(
+        "catalogo/",
+        include(("smartsales.catalogo.urls", "catalogo"), namespace="catalogo")
+    ),
+
+    # CU-30: Dashboard ejecutivo - Solo Analista y Administrador
+    path(
+        "dashboard-ejecutivo/",
+        include(("smartsales.dashboard_ejecutivo.urls", "dashboard_ejecutivo"), namespace="dashboard_ejecutivo")
+    ),
+
 ]
